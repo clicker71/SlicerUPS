@@ -49,12 +49,50 @@ from .watcher import Watcher, parse_event
 log = logging.getLogger("slicer_ups_client")
 
 
+def _dicom_part(content_type: Optional[str], body: bytes) -> bytes:
+    """The DICOM bytes of a WADO-RS instance response.
+
+    The default representation is multipart/related (PS3.18 10.4.4);
+    single-part application/dicom is optional. A non-multipart body is
+    returned unchanged. A multipart body has exactly one part for a single
+    instance retrieve: `--boundary`, the part headers, then the DICOM bytes
+    before the closing `--boundary--`.
+    """
+    if not content_type or not content_type.lower().startswith("multipart"):
+        return body
+    boundary: Optional[str] = None
+    for piece in content_type.split(";"):
+        piece = piece.strip()
+        if piece.lower().startswith("boundary="):
+            boundary = piece.split("=", 1)[1].strip().strip('"').strip("'")
+            break
+    if not boundary:
+        return body
+    delimiter = ("--" + boundary).encode("utf-8")
+    start = body.find(delimiter)
+    if start == -1:
+        return body
+    header_end = body.find(b"\r\n\r\n", start)
+    if header_end == -1:
+        return body
+    payload_start = header_end + 4
+    end = body.find(delimiter, payload_start)
+    if end == -1:
+        return body[payload_start:]
+    return body[payload_start:end].rstrip(b"\r\n")
+
+
 class UPSClient:
     def __init__(self, transport: DicomwebClient | str, token: Optional[str] = None) -> None:
         if isinstance(transport, str):
             transport = DicomwebClient(transport, token=token)
         self._web: DicomwebClient = transport
         self.watcher = Watcher(transport)
+        # PS3.18 11.5.2 forbids GET from returning the Transaction UID, so a
+        # claim the client itself installs has no other home: the UID the
+        # client generated is retained here per workitem and reused by later
+        # update/change_state calls.
+        self._transaction_uids: dict[str, str] = {}
 
     # -- low-level transactions -------------------------------------------
     def search(self, filters: dict) -> list[Workitem]:
@@ -105,7 +143,7 @@ class UPSClient:
         so both are omitted then.
         """
         current = self.get(workitem_uid)
-        tx_uid = get_string(current.raw, TRANSACTION_UID)
+        tx_uid = get_string(current.raw, TRANSACTION_UID) or self._transaction_uids.get(workitem_uid)
         body = dict(patch)
         if tx_uid:
             body[TRANSACTION_UID] = {"vr": "UI", "Value": [tx_uid]}
@@ -125,9 +163,13 @@ class UPSClient:
         one because a queued workitem carries no lock yet. CANCELED carries
         Reason For Cancellation (0074,1238) LT."""
         current = self.get(workitem_uid)
-        tx_uid = get_string(current.raw, TRANSACTION_UID)
+        tx_uid = get_string(current.raw, TRANSACTION_UID) or self._transaction_uids.get(workitem_uid)
         if state == STATE_IN_PROGRESS and not tx_uid:
             tx_uid = new_workitem_uid()
+        if tx_uid:
+            # Retain BEFORE the write: if the write or the readback raises,
+            # the UID the client owns must survive for the next attempt.
+            self._transaction_uids[workitem_uid] = tx_uid
         body: dict[str, dict] = {PROCEDURE_STEP_STATE: {"vr": "CS", "Value": [state]}}
         if tx_uid:
             body[TRANSACTION_UID] = {"vr": "UI", "Value": [tx_uid]}
@@ -246,9 +288,10 @@ class UPSClient:
                     "GET",
                     f"/studies/{item_study}/series/{series_uid}/instances/{instance_uid}",
                     raw=True,
-                    accept="application/dicom",
+                    accept='multipart/related; type="application/dicom"',
                 )
-                path.write_bytes(data.content)
+                content_type = data.headers.get("Content-Type", "") if data.headers else ""
+                path.write_bytes(_dicom_part(content_type, data.content))
                 paths.append(path)
         return paths
 

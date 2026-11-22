@@ -232,12 +232,25 @@ def test_change_state_claim_installs_a_new_transaction_uid():
     assert body["00081195"]["Value"][0].startswith("2.25.")
 
 
-def test_change_state_reuses_the_stored_transaction_uid():
+def test_change_state_reuses_the_generated_transaction_uid():
     t = FakeTransport()
-    t.get_result = WORKITEM_IN_PROGRESS_LOCKED
-    UPSClient(t).change_state("2.25.9", "CANCELED", reason="user")
+    # The claim starts from a SCHEDULED workitem with no lock.
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    cl = UPSClient(t)
+    cl.change_state("2.25.9", "IN PROGRESS")
+    claim_uid = t.last_json["00081195"]["Value"][0]
+    # GET never returns the Transaction UID (11.5.2), so the later CANCEL must
+    # reuse the UID the claim generated and retained - not re-read it.
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["IN PROGRESS"]},
+    }
+    cl.change_state("2.25.9", "CANCELED", reason="user")
     body = t.last_json
-    assert body["00081195"]["Value"] == ["2.25.77"]
+    assert body["00081195"]["Value"] == [claim_uid]
     assert body["00741238"]["Value"] == ["user"]
 
 
@@ -263,7 +276,33 @@ def test_download_outputs_reads_the_nested_output_sequence(tmp_path):
     # The item omits the study UID; the URL falls back to the workitem's own.
     assert ("GET", "/studies/1.2.3/series/2.25.44/instances/2.25.55", None) in t.calls
     # The instance must be retrieved as binary DICOM, not DICOM JSON metadata.
-    assert t.last_accept == "application/dicom"
+    assert t.last_accept == 'multipart/related; type="application/dicom"'
+
+
+def test_download_outputs_extracts_the_dicom_part_from_multipart(tmp_path):
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+        "00741216": {"vr": "SQ", "Value": [{
+            "00404033": {"vr": "SQ", "Value": [{
+                "0020000E": {"vr": "UI", "Value": ["2.25.44"]},
+                "00081155": {"vr": "UI", "Value": ["2.25.55"]},
+            }]},
+        }]},
+    }
+    boundary = "clarus-boundary-1-0"
+    dicom = b"\x00" * 128 + b"DICM" + b"\x01\x02\x03"
+    t.post_result = FakeResponse(headers={
+        "Content-Type": f'multipart/related; type="application/dicom"; boundary="{boundary}"',
+    })
+    t.post_result.content = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/dicom; transfer-syntax=1.2.840.10008.1.2.1\r\n\r\n"
+    ).encode() + dicom + f"\r\n--{boundary}--\r\n".encode()
+    paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
+    assert len(paths) == 1
+    assert paths[0].read_bytes() == dicom
 
 
 def test_download_outputs_handles_nested_referenced_sop_sequence(tmp_path):
