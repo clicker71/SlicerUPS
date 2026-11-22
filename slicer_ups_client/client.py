@@ -35,6 +35,7 @@ from .models import (
     PROCEDURE_STEP_STATE,
     STATE_IN_PROGRESS,
     STATE_CANCELED,
+    STATE_SCHEDULED,
     SCHEDULED_PROCEDURE_STEP_PRIORITY,
     PROCEDURE_STEP_LABEL,
     SCHEDULED_PROCEDURE_STEP_START_DATETIME,
@@ -56,7 +57,9 @@ def _dicom_part(content_type: Optional[str], body: bytes) -> bytes:
     single-part application/dicom is optional. A non-multipart body is
     returned unchanged. A multipart body has exactly one part for a single
     instance retrieve: `--boundary`, the part headers, then the DICOM bytes
-    before the closing `--boundary--`.
+    before the closing `--boundary--`. The closing delimiter is recognised
+    only when it begins a line (a CRLF precedes it); the payload slice keeps
+    every byte it carries.
     """
     if not content_type or not content_type.lower().startswith("multipart"):
         return body
@@ -76,10 +79,14 @@ def _dicom_part(content_type: Optional[str], body: bytes) -> bytes:
     if header_end == -1:
         return body
     payload_start = header_end + 4
-    end = body.find(delimiter, payload_start)
+    # A delimiter closes the part only when it begins a line (a CRLF precedes
+    # it). Searching for the CRLF-prefixed form preserves a boundary-like run
+    # inside the payload, and the slice keeps every trailing byte the payload
+    # carries - the framing CRLF belongs to the delimiter, outside the slice.
+    end = body.find(b"\r\n" + delimiter, payload_start)
     if end == -1:
         return body[payload_start:]
-    return body[payload_start:end].rstrip(b"\r\n")
+    return body[payload_start:end]
 
 
 class UPSClient:
@@ -143,7 +150,9 @@ class UPSClient:
         so both are omitted then.
         """
         current = self.get(workitem_uid)
-        tx_uid = get_string(current.raw, TRANSACTION_UID) or self._transaction_uids.get(workitem_uid)
+        tx_uid = None
+        if current.state != STATE_SCHEDULED:
+            tx_uid = get_string(current.raw, TRANSACTION_UID) or self._transaction_uids.get(workitem_uid)
         body = dict(patch)
         if tx_uid:
             body[TRANSACTION_UID] = {"vr": "UI", "Value": [tx_uid]}

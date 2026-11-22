@@ -8,6 +8,7 @@ shipped here - so each test drives the real code path.
 import pytest
 
 from slicer_ups_client import UPSClient, Code, parse_event
+from slicer_ups_client.client import _dicom_part
 from slicer_ups_client.watcher import Subscription
 
 
@@ -324,3 +325,55 @@ def test_download_outputs_handles_nested_referenced_sop_sequence(tmp_path):
     t.post_result.content = b"x"
     paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
     assert [p.name for p in paths] == ["2.25.55.dcm", "2.25.66.dcm"]
+
+
+def test_multipart_extraction_preserves_a_trailing_crlf_in_the_payload():
+    boundary = "b"
+    payload = b"DICM\x00\x01" + b"\r\n"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+        + payload
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    ct = f'multipart/related; type="application/dicom"; boundary="{boundary}"'
+    assert _dicom_part(ct, body) == payload
+
+
+def test_multipart_extraction_preserves_inline_boundary_like_bytes():
+    boundary = "b"
+    payload = b"DICM\x00--" + boundary.encode() + b"--\x00\x01"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+        + payload
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    ct = f'multipart/related; type="application/dicom"; boundary="{boundary}"'
+    assert _dicom_part(ct, body) == payload
+
+
+def test_update_scheduled_workitem_omits_a_stale_cached_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    cl = UPSClient(t)
+    cl._transaction_uids["2.25.9"] = "2.25.stale"
+    cl.update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]
+    assert params is None
+    assert "00081195" not in t.last_json
+
+
+def test_update_in_progress_uses_the_cached_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["IN PROGRESS"]},
+    }
+    cl = UPSClient(t)
+    cl._transaction_uids["2.25.9"] = "2.25.99"
+    cl.update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]
+    assert params == {"TransactionUid": "2.25.99"}
+    assert t.last_json["00081195"] == {"vr": "UI", "Value": ["2.25.99"]}
