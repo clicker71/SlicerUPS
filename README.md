@@ -150,9 +150,10 @@ python scripts/run_ups.py --root http://localhost:8024/dicomweb \
 
 `.yaml`/`.yml` need PyYAML; `.json` works with no extra dependency. An
 optional `match.body_part` narrows a procedure to one body part. The code
-vocabulary (`CXR-AI`, `CT-ORGAN-SEG`, `99CLARUS`) is the one clinfer uses -
-copy the values from
-[`clinfer.conf.example.en`](https://github.com/clicker71/clarus-pacs/blob/main/clinfer/clinfer.conf.example.en).
+values are the shared procedure vocabulary - `CXR-AI` for DX, `CT-ORGAN-SEG`
+for CT - the same values clinfer dispatches on (see
+[`clinfer.conf.example.en`](https://github.com/clicker71/clarus-pacs/blob/main/clinfer/clinfer.conf.example.en));
+pair each with your own `99...` private scheme.
 
 **This is not yet standardized.** A machine-readable capability description
 is still being worked on: the IHE AI Service Properties (AISP) work item -
