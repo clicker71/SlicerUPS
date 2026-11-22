@@ -52,6 +52,7 @@ and prints the workitem UID. Flags:
 - `--study` - Study Instance UID.
 - `--code` - workitem code (`value` or `scheme:value`).
 - `--modality` - default CT.
+- `--body-part` - optional body part, used only for catalog matching.
 - `--catalog` - alternative to `--code`: pick the code from a catalog file.
 - `--watch-mode` - `auto` (default) | `websocket` | `poll`.
 - `--poll-interval` - seconds between polls.
@@ -130,11 +131,18 @@ pick the code for the study's modality:
 # catalog.yaml - the procedures this node offers (neutral, hand-written)
 procedures:
   - match:
-      modality: [CT]      # list of modalities
+      modality: [CT]
+      body_part: LUNG     # optional: narrow to one body part
     code:
       value: CT-ORGAN-SEG
       scheme: 99CLARUS    # any 99... private coding scheme
       meaning: Organ segmentation
+  - match:
+      modality: [CT]
+    code:
+      value: CT-BRAIN
+      scheme: 99CLARUS
+      meaning: Brain segmentation
   - match:
       modality: [DX, CR]
     code:
@@ -145,13 +153,15 @@ procedures:
 
 ```sh
 python scripts/run_ups.py --root http://localhost:8024/dicomweb \
-    run --study 1.2.3 --catalog catalog.yaml --modality CT
+    run --study 1.2.3 --catalog catalog.yaml --modality CT --body-part LUNG
 ```
 
-`.yaml`/`.yml` need PyYAML; `.json` works with no extra dependency. An
-optional `match.body_part` narrows a procedure to one body part. The code
-values are the shared procedure vocabulary - `CXR-AI` for DX, `CT-ORGAN-SEG`
-for CT - the same values clinfer dispatches on (see
+`.yaml`/`.yml` need PyYAML; `.json` works with no extra dependency.
+`match.body_part` narrows a procedure to one body part: with `--body-part`,
+only entries whose `body_part` equals it (or that set none) are considered;
+without `--body-part`, body-part-keyed entries never match. The code values
+are the shared procedure vocabulary - `CXR-AI` for DX, `CT-ORGAN-SEG` for CT
+- the same values clinfer dispatches on (see
 [`clinfer.conf.example.en`](https://github.com/clicker71/clarus-pacs/blob/main/clinfer/clinfer.conf.example.en));
 pair each with your own `99...` private scheme.
 
