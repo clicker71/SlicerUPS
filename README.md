@@ -120,6 +120,46 @@ params = [
 ]
 ```
 
+## Per-node catalog
+
+`--code` names one workitem code by hand. A site with several procedures
+describes them once in a vendor-neutral catalog file and lets `--catalog`
+pick the code for the study's modality:
+
+```yaml
+# catalog.yaml - the procedures this node offers (neutral, hand-written)
+procedures:
+  - match:
+      modality: [CT]      # list of modalities
+    code:
+      value: CT-ORGAN-SEG
+      scheme: 99CLARUS    # any 99... private coding scheme
+      meaning: Organ segmentation
+  - match:
+      modality: [DX, CR]
+    code:
+      value: CXR-AI
+      scheme: 99CLARUS
+      meaning: Chest X-ray AI
+```
+
+```sh
+python scripts/run_ups.py --root http://localhost:8024/dicomweb \
+    run --study 1.2.3 --catalog catalog.yaml --modality CT
+```
+
+`.yaml`/`.yml` need PyYAML; `.json` works with no extra dependency. An
+optional `match.body_part` narrows a procedure to one body part. The code
+vocabulary (`CXR-AI`, `CT-ORGAN-SEG`, `99CLARUS`) is the one clinfer uses -
+copy the values from
+[`clinfer.conf.example.en`](https://github.com/clicker71/clarus-pacs/blob/main/clinfer/clinfer.conf.example.en).
+
+**This is not yet standardized.** A machine-readable capability description
+is still being worked on: the IHE AI Service Properties (AISP) work item -
+commonly called "AISCap" - is an active proposal, not a published profile.
+Until it ships there is no standard catalog to consume, so each node carries
+this per-node catalog instead.
+
 ## License
 
 MIT.
