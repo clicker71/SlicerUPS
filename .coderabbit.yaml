@@ -1,0 +1,32 @@
+language: en-US
+reviews:
+  profile: chill
+  high_level_summary: true
+  path_instructions:
+    - path: "slicer_ups_client/**"
+      instructions: |
+        Core is UI-agnostic: no imports of qt/slicer/vtk/Slicer. No print(),
+        use logging. Strict type hints. UPS-RS requests must be PS3.18
+        section 11 conformant: 204 on search is an empty list, subscribe
+        POSTs before opening the channel, N-EVENT-REPORT is parsed as DICOM
+        JSON (0008,1000 + 0074,1000 + 0000,1002), events are filtered to the
+        subscribed workitem UID, CANCELED carries Reason For Cancellation
+        (0074,1238) VR LT, and WebSocket failure degrades to polling without
+        crashing. Preserve DICOM JSON VR fidelity - never flatten object-
+        valued VRs. The (0074,1210) parameters codec must round-trip and keep
+        object shape (Concept Name Code Sequence and Concept Code Sequence
+        are SQ objects, not strings).
+    - path: "hooks/**"
+      instructions: |
+        Examples only. Qt and print are allowed. Keep each file self-
+        contained and short, and mark clearly that it is an example.
+    - path: "tests/**"
+      instructions: |
+        Tests must fail when the fix they pin is reverted - a test that stays
+        green with the fix reverted is vacuous and must be rewritten or
+        deleted. Cover: 204 search, subscribe round-trip order, standard and
+        envelope event frames, foreign-workitem event drop, WebSocket open
+        failure cleanup, and WebSocket-fail-to-poll fallback.
+  auto_review:
+    enabled: true
+    drafts: false
