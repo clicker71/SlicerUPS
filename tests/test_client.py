@@ -48,15 +48,17 @@ class FakeTransport:
 
     def put(self, path, body=None, raw=False):
         self.calls.append(("put", path))
+        self.last_json = body
         return self.post_result
 
     def delete(self, path):
         self.calls.append(("delete", path))
         return self.post_result
 
-    def request(self, method, path, *, params=None, json=None, raw=False):
+    def request(self, method, path, *, params=None, json=None, raw=False, accept=None):
         self.calls.append((method, path, params))
         self.last_json = json
+        self.last_accept = accept
         return self.post_result
 
     def open_websocket(self, url, timeout=None):
@@ -183,3 +185,103 @@ def test_reverted_subscribe_order_would_fail():
     UPSClient(t).watcher.subscribe("1.2.3", "AE", mode="websocket")
     assert t.calls[0][0] == "post"
     assert t.calls[1][0] == "ws"
+
+
+WORKITEM_IN_PROGRESS_LOCKED = {
+    "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+    "00741000": {"vr": "CS", "Value": ["IN PROGRESS"]},
+    "00081195": {"vr": "UI", "Value": ["2.25.77"]},
+}
+
+
+def test_update_posts_with_transaction_uid_on_both_carriages():
+    t = FakeTransport()
+    t.get_result = WORKITEM_IN_PROGRESS_LOCKED
+    UPSClient(t).update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]  # calls[0] is the get of the current workitem
+    assert method == "POST"
+    assert path == "/workitems/2.25.9"
+    assert params == {"TransactionUid": "2.25.77"}
+    assert t.last_json["00081195"] == {"vr": "UI", "Value": ["2.25.77"]}
+    assert t.last_json["00741204"]["Value"] == ["retuned"]
+
+
+def test_update_scheduled_workitem_omits_the_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    UPSClient(t).update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]
+    assert method == "POST"
+    assert params is None
+    assert "00081195" not in t.last_json
+
+
+def test_change_state_claim_installs_a_new_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    UPSClient(t).change_state("2.25.9", "IN PROGRESS")
+    assert t.calls[1][0:2] == ("put", "/workitems/2.25.9/state")
+    body = t.last_json
+    assert body["00741000"]["Value"] == ["IN PROGRESS"]
+    assert body["00081195"]["Value"][0].startswith("2.25.")
+
+
+def test_change_state_reuses_the_stored_transaction_uid():
+    t = FakeTransport()
+    t.get_result = WORKITEM_IN_PROGRESS_LOCKED
+    UPSClient(t).change_state("2.25.9", "CANCELED", reason="user")
+    body = t.last_json
+    assert body["00081195"]["Value"] == ["2.25.77"]
+    assert body["00741238"]["Value"] == ["user"]
+
+
+def test_download_outputs_reads_the_nested_output_sequence(tmp_path):
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+        "00741000": {"vr": "CS", "Value": ["COMPLETED"]},
+        "00741216": {"vr": "SQ", "Value": [{
+            "00404033": {"vr": "SQ", "Value": [{
+                "00081150": {"vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.7"]},
+                "0020000E": {"vr": "UI", "Value": ["2.25.44"]},
+                "00081155": {"vr": "UI", "Value": ["2.25.55"]},
+            }]},
+        }]},
+    }
+    t.post_result = FakeResponse()
+    t.post_result.content = b"\x00\x01\x02"
+    paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
+    assert len(paths) == 1
+    assert paths[0].read_bytes() == b"\x00\x01\x02"
+    # The item omits the study UID; the URL falls back to the workitem's own.
+    assert ("GET", "/studies/1.2.3/series/2.25.44/instances/2.25.55", None) in t.calls
+    # The instance must be retrieved as binary DICOM, not DICOM JSON metadata.
+    assert t.last_accept == "application/dicom"
+
+
+def test_download_outputs_handles_nested_referenced_sop_sequence(tmp_path):
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+        "00741216": {"vr": "SQ", "Value": [{
+            "00404033": {"vr": "SQ", "Value": [{
+                "0020000E": {"vr": "UI", "Value": ["2.25.44"]},
+                "00081199": {"vr": "SQ", "Value": [
+                    {"00081155": {"vr": "UI", "Value": ["2.25.55"]}},
+                    {"00081155": {"vr": "UI", "Value": ["2.25.66"]}},
+                ]},
+            }]},
+        }]},
+    }
+    t.post_result = FakeResponse()
+    t.post_result.content = b"x"
+    paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
+    assert [p.name for p in paths] == ["2.25.55.dcm", "2.25.66.dcm"]

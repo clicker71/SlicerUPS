@@ -49,8 +49,10 @@ class DicomwebClient:
     def _url(self, path: str) -> str:
         return f"{self.root_url}/{path.lstrip('/')}"
 
-    def _headers(self, content_type: Optional[str] = None) -> dict:
-        headers: dict[str, str] = {"Accept": "application/dicom+json"}
+    def _headers(self, content_type: Optional[str] = None, accept: Optional[str] = None) -> dict:
+        headers: dict[str, str] = {
+            "Accept": accept if accept is not None else "application/dicom+json"
+        }
         if content_type is not None:
             headers["Content-Type"] = content_type
         if self.token:
@@ -75,14 +77,15 @@ class DicomwebClient:
         params: Optional[dict] = None,
         json: Any = None,
         raw: bool = False,
+        accept: Optional[str] = None,
     ) -> Any:
         url = self._url(path)
-        kwargs: dict[str, Any] = {"headers": self._headers(None), "timeout": self.timeout}
+        kwargs: dict[str, Any] = {"headers": self._headers(None, accept=accept), "timeout": self.timeout}
         if params:
             kwargs["params"] = params
         if json is not None:
             kwargs["json"] = json
-            kwargs["headers"] = self._headers("application/dicom+json")
+            kwargs["headers"] = self._headers("application/dicom+json", accept=accept)
         response = self._session.request(method, url, **kwargs)
         self._raise_for(response)
         if raw or method.upper() == "HEAD":

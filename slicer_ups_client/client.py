@@ -96,9 +96,23 @@ class UPSClient:
         return uid
 
     def update(self, workitem_uid: str, patch: dict) -> Workitem:
-        """PUT /workitems/{uid} (11.6). Attributes incl. (0074,1210) are only
-        modifiable while the workitem is SCHEDULED."""
-        self._web.put(f"/workitems/{workitem_uid}", body=patch)
+        """POST /workitems/{uid}?TransactionUid={tx} (11.6). Attributes incl.
+        (0074,1210) are only modifiable while the workitem is SCHEDULED.
+
+        The Transaction UID rides on BOTH carriages the standard gives it:
+        the `?TransactionUid=` query parameter (11.6.1.2) and the (0008,1195)
+        data-set attribute (CC.2.6.2). A SCHEDULED workitem has no lock yet,
+        so both are omitted then.
+        """
+        current = self.get(workitem_uid)
+        tx_uid = get_string(current.raw, TRANSACTION_UID)
+        body = dict(patch)
+        if tx_uid:
+            body[TRANSACTION_UID] = {"vr": "UI", "Value": [tx_uid]}
+        params = {"TransactionUid": tx_uid} if tx_uid else None
+        self._web.request(
+            "POST", f"/workitems/{workitem_uid}", params=params, json=body
+        )
         return self.get(workitem_uid)
 
     def claim(self, workitem_uid: str) -> Workitem:
@@ -106,10 +120,14 @@ class UPSClient:
         return self.change_state(workitem_uid, STATE_IN_PROGRESS)
 
     def change_state(self, workitem_uid: str, state: str, reason: Optional[str] = None) -> Workitem:
-        """PUT /workitems/{uid}/state (11.7), Transaction UID from the current
-        workitem. CANCELED carries Reason For Cancellation (0074,1238) LT."""
+        """PUT /workitems/{uid}/state (11.7). The Transaction UID travels in the
+        data set (CC.2.1-1); a claim (SCHEDULED -> IN PROGRESS) installs a new
+        one because a queued workitem carries no lock yet. CANCELED carries
+        Reason For Cancellation (0074,1238) LT."""
         current = self.get(workitem_uid)
         tx_uid = get_string(current.raw, TRANSACTION_UID)
+        if state == STATE_IN_PROGRESS and not tx_uid:
+            tx_uid = new_workitem_uid()
         body: dict[str, dict] = {PROCEDURE_STEP_STATE: {"vr": "CS", "Value": [state]}}
         if tx_uid:
             body[TRANSACTION_UID] = {"vr": "UI", "Value": [tx_uid]}
@@ -183,38 +201,55 @@ class UPSClient:
 
     def download_outputs(self, workitem_uid: str, out_dir: Optional[Path] = None) -> list[Path]:
         """Retrieve the result instances named by Output Information Sequence
-        (0040,4033) over WADO-RS into a temp directory. Returns the paths."""
+        (0040,4033) over WADO-RS into a temp directory. Returns the paths.
+
+        (0040,4033) is a child of (0074,1216) Unified Procedure Step Performed
+        Procedure Sequence (PS3.3 C.30.3-1), not a top-level attribute. Each
+        item carries the Referenced Instances and Access Macro (PS3.3 Table
+        10-3b): a flat (0008,1150)/(0008,1155) pair, or a nested (0008,1199)
+        Referenced SOP Sequence, plus (0020,000D)/(0020,000E) at the item
+        level. The study UID falls back to the workitem's own when an item
+        omits it.
+        """
         workitem = self.get(workitem_uid)
-        output_seq = workitem.raw.get(OUTPUT_INFORMATION_SEQUENCE, {})
+        performed = get_first_item(workitem.raw, "00741216") or {}
+        output_seq = performed.get(OUTPUT_INFORMATION_SEQUENCE, {})
         items = output_seq.get("Value", []) if isinstance(output_seq, dict) else []
+        study = get_string(workitem.raw, STUDY_INSTANCE_UID)
+        if not study:
+            study = get_string(
+                get_first_item(workitem.raw, INPUT_INFORMATION_SEQUENCE) or {},
+                STUDY_INSTANCE_UID,
+            )
         tmp = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="slicer-ups-"))
+        tmp.mkdir(parents=True, exist_ok=True)
         paths: list[Path] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
-            study = get_string(item, STUDY_INSTANCE_UID)
-            series_seq = item.get(REFERENCED_SERIES_SEQUENCE, {})
-            series_items = series_seq.get("Value", []) if isinstance(series_seq, dict) else []
-            for series in series_items:
-                if not isinstance(series, dict):
+            item_study = get_string(item, STUDY_INSTANCE_UID) or study
+            series_uid = get_string(item, SERIES_INSTANCE_UID)
+            nested = item.get(REFERENCED_SOP_SEQUENCE, {})
+            sop_items = (
+                nested.get("Value", [])
+                if isinstance(nested, dict) and isinstance(nested.get("Value"), list)
+                else [item]
+            )
+            for sop in sop_items:
+                if not isinstance(sop, dict):
                     continue
-                series_uid = get_string(series, SERIES_INSTANCE_UID)
-                sop_seq = series.get(REFERENCED_SOP_SEQUENCE, {})
-                sop_items = sop_seq.get("Value", []) if isinstance(sop_seq, dict) else []
-                for sop in sop_items:
-                    if not isinstance(sop, dict):
-                        continue
-                    instance_uid = get_string(sop, REFERENCED_SOP_INSTANCE_UID)
-                    if not (study and series_uid and instance_uid):
-                        continue
-                    path = tmp / f"{instance_uid}.dcm"
-                    data = self._web.request(
-                        "GET",
-                        f"/studies/{study}/series/{series_uid}/instances/{instance_uid}",
-                        raw=True,
-                    )
-                    path.write_bytes(data.content)
-                    paths.append(path)
+                instance_uid = get_string(sop, REFERENCED_SOP_INSTANCE_UID)
+                if not (item_study and series_uid and instance_uid):
+                    continue
+                path = tmp / f"{instance_uid}.dcm"
+                data = self._web.request(
+                    "GET",
+                    f"/studies/{item_study}/series/{series_uid}/instances/{instance_uid}",
+                    raw=True,
+                    accept="application/dicom",
+                )
+                path.write_bytes(data.content)
+                paths.append(path)
         return paths
 
     # -- internals ---------------------------------------------------------
