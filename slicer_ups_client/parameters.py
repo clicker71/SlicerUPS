@@ -6,7 +6,9 @@ Each parameter is ONE Content Item (Content Item Macro, PS3.3 Table 10-2):
 - Value Type (0040,A040): NUMERIC | TEXT | CODE | DATETIME | DATE | TIME |
   UIDREF | PNAME.
 - Concept Name Code Sequence (0040,A043): the parameter name. Locally-defined
-  names use the private 99 prefix (PS3.3 8.2), e.g. 99CLARUS:SENSITIVITY.
+  names use the private 99 prefix (PS3.3 8.2): coding scheme designators
+  beginning with `99` are private/local schemes (HL7 V2), so the prefix is
+  not a vendor extension - any `99...` name works (99CLARUS, 99SLICER, ...).
 - Value: NUMERIC -> Numeric Value (0040,A30A) DS; TEXT -> Text Value
   (0040,A160) UT; CODE -> Concept Code Sequence (0040,A168).
 

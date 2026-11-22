@@ -57,6 +57,12 @@ and prints the workitem UID. Flags:
 - `--poll-interval` - seconds between polls.
 - `--timeout` - seconds before giving up.
 
+The `99` prefix in a coding scheme designator is **not** a vendor extension.
+PS3.3 section 8.2 defines designators beginning with `99` as private/local
+coding schemes (per HL7 V2), so any `99...` scheme is equally valid -
+`99CLARUS`, `99SLICER`, `99MYLAB`, and so on. Pick one that names your site or
+product; the bare `--code value` shorthand defaults to the `99CLARUS` scheme.
+
 ### watch - wait for an existing workitem
 
 ```sh
