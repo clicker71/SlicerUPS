@@ -50,7 +50,7 @@ POSTs a workitem for the study, then watches it until COMPLETED or CANCELED
 and prints the workitem UID. Flags:
 
 - `--study` - Study Instance UID.
-- `--code` - workitem code (`value` or `scheme:value`).
+- `--code` - workitem code (`value` or `scheme:value`); optional when `--catalog` is given.
 - `--modality` - default CT.
 - `--body-part` - optional body part, used only for catalog matching.
 - `--catalog` - alternative to `--code`: pick the code from a catalog file.

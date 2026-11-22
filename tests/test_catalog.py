@@ -74,3 +74,37 @@ def test_resolve_code_with_catalog_no_body_part(tmp_path: Path) -> None:
     run_ups = _load_run_ups()
     args = argparse.Namespace(catalog=str(path), modality="CT", body_part=None, code=None)
     assert run_ups._resolve_code(args) == Code("CT-BRAIN", "99CLARUS", "Brain segmentation")
+
+
+def test_cli_run_catalog_body_part(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps({"procedures": PROCEDURES}), encoding="utf-8")
+    run_ups = _load_run_ups()
+
+    captured: dict = {}
+
+    class FakeClient:
+        def run(self, study: str, code: Code, **kwargs) -> str:
+            captured["study"] = study
+            captured["code"] = code
+            return "1.2.3.4"
+
+    monkeypatch.setattr(run_ups, "_client", lambda args: FakeClient())
+    rc = run_ups.main(
+        [
+            "--root",
+            "http://localhost:8024/dicomweb",
+            "run",
+            "--study",
+            "1.2.3",
+            "--catalog",
+            str(path),
+            "--modality",
+            "CT",
+            "--body-part",
+            "LUNG",
+        ]
+    )
+    assert rc == 0
+    assert captured["code"] == Code("CT-ORGAN-SEG", "99CLARUS", "Organ segmentation")
+    assert captured["study"] == "1.2.3"
