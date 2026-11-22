@@ -7,7 +7,7 @@ shipped here - so each test drives the real code path.
 
 import pytest
 
-from slicer_ups_client import UPSClient, parse_event
+from slicer_ups_client import UPSClient, Code, parse_event
 from slicer_ups_client.watcher import Subscription
 
 
@@ -55,7 +55,8 @@ class FakeTransport:
         return self.post_result
 
     def request(self, method, path, *, params=None, json=None, raw=False):
-        self.calls.append((method, path))
+        self.calls.append((method, path, params))
+        self.last_json = json
         return self.post_result
 
     def open_websocket(self, url, timeout=None):
@@ -118,6 +119,43 @@ def test_parse_event_standard_dicom_json():
     event = parse_event(payload)
     assert event is not None
     assert event.workitem_uid == "1.2.3" and event.state == "COMPLETED"
+
+
+def test_create_sends_workitem_query_and_no_sop_class():
+    t = FakeTransport()
+    t.post_result = FakeResponse(
+        headers={"Content-Location": "http://origin/dicomweb/workitems/2.25.999"}
+    )
+    uid = UPSClient(t).create(
+        {"0020000D": {"vr": "UI", "Value": ["1.2.3"]}},
+    )
+    assert uid == "2.25.999"
+    method, path, params = t.calls[0]
+    assert (method, path) == ("POST", "/workitems")
+    assert set(params) == {"workitem"}
+    assert params["workitem"].startswith("2.25.")
+    # SOP Class UID and SOP Instance UID must not be in the body: the UID is
+    # the query parameter and the SOP Class is set by the SCP.
+    assert "00080016" not in t.last_json
+    assert "00080018" not in t.last_json
+
+
+def test_build_workitem_has_type1_create_attributes():
+    cl = UPSClient(FakeTransport())
+    wi = cl._build_workitem(
+        study_uid="1.2.3",
+        code=Code("CXR-AI", "99CLARUS"),
+        modality="DX",
+        series_uid=None,
+        requested_procedure_id=None,
+    )
+    assert wi["00741200"]["Value"] == ["MEDIUM"]
+    assert wi["00741204"]["Value"] == ["CXR-AI"]
+    assert wi["00404041"]["Value"] == ["READY"]
+    start = wi["00404005"]["Value"][0]
+    assert len(start) == 14 and start.isdigit()
+    assert "00080016" not in wi
+    assert "00080018" not in wi
 
 
 def test_parse_event_clarus_envelope_compatibility():

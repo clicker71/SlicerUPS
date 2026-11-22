@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,9 +20,7 @@ from .models import (
     WorkitemEvent,
     WorkitemParameter,
     MODALITY,
-    SOP_CLASS_UID,
     SOP_INSTANCE_UID,
-    UPS_PUSH_SOP_CLASS,
     STUDY_INSTANCE_UID,
     SERIES_INSTANCE_UID,
     REQUESTED_PROCEDURE_ID,
@@ -36,6 +35,11 @@ from .models import (
     PROCEDURE_STEP_STATE,
     STATE_IN_PROGRESS,
     STATE_CANCELED,
+    SCHEDULED_PROCEDURE_STEP_PRIORITY,
+    PROCEDURE_STEP_LABEL,
+    SCHEDULED_PROCEDURE_STEP_START_DATETIME,
+    INPUT_READINESS_STATE,
+    new_workitem_uid,
     get_string,
     get_first_item,
 )
@@ -73,16 +77,23 @@ class UPSClient:
         workitem: dict,
         parameters: Optional[list[WorkitemParameter]] = None,
     ) -> str:
-        """POST /workitems (11.2). Returns the new workitem UID."""
+        """POST /workitems?workitem={uid} (PS3.18 11.4). Returns the new UID.
+
+        The Workitem UID is the `workitem` query parameter (the Affected SOP
+        Instance UID); the SOP Class UID is set by the SCP, so neither belongs
+        in the body.
+        """
+        uid = new_workitem_uid()
         body = dict(workitem)
-        body.setdefault(SOP_CLASS_UID, {"vr": "UI", "Value": [UPS_PUSH_SOP_CLASS]})
         if parameters:
             body.update(encode_parameters(parameters))
-        response = self._web.post("/workitems", body=body, raw=True)
+        response = self._web.request(
+            "POST", "/workitems", params={"workitem": uid}, json=body, raw=True
+        )
         location = response.headers.get("Content-Location") if response is not None else None
-        if not location:
-            raise RuntimeError("create workitem: no Content-Location in response")
-        return location.rstrip("/").rsplit("/", 1)[-1]
+        if location:
+            return location.rstrip("/").rsplit("/", 1)[-1]
+        return uid
 
     def update(self, workitem_uid: str, patch: dict) -> Workitem:
         """PUT /workitems/{uid} (11.6). Attributes incl. (0074,1210) are only
@@ -225,6 +236,15 @@ class UPSClient:
             MODALITY: {"vr": "CS", "Value": [modality]},
             STUDY_INSTANCE_UID: {"vr": "UI", "Value": [study_uid]},
             SCHEDULED_WORKITEM_CODE_SEQUENCE: {"vr": "SQ", "Value": [code.to_json()]},
+            # Type-1 at N-CREATE (PS3.4 Table CC.2.5-3): the SCP must not
+            # invent these, and a conformant origin refuses a body without them.
+            SCHEDULED_PROCEDURE_STEP_PRIORITY: {"vr": "CS", "Value": ["MEDIUM"]},
+            PROCEDURE_STEP_LABEL: {"vr": "SH", "Value": [code.meaning or code.value]},
+            SCHEDULED_PROCEDURE_STEP_START_DATETIME: {
+                "vr": "DT",
+                "Value": [datetime.now().strftime("%Y%m%d%H%M%S")],
+            },
+            INPUT_READINESS_STATE: {"vr": "CS", "Value": ["READY"]},
         }
         if requested_procedure_id:
             body[REQUESTED_PROCEDURE_ID] = {"vr": "SH", "Value": [requested_procedure_id]}

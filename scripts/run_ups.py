@@ -45,8 +45,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("run")
     p.add_argument("--study", required=True)
-    p.add_argument("--code", required=True, help="value or scheme:value")
+    p.add_argument("--code", help="value or scheme:value (required unless --catalog is given)")
     p.add_argument("--modality", default="CT")
+    p.add_argument("--body-part", dest="body_part", help="body part for catalog matching")
     p.add_argument("--catalog", help="path to a catalog JSON/YAML (alternative to --code)")
     p.add_argument("--watch-mode", dest="watch_mode", default="auto")
     p.add_argument("--poll-interval", dest="poll_interval", type=float, default=2.0)
@@ -104,10 +105,14 @@ def main(argv: list[str] | None = None) -> int:
 def _resolve_code(args: argparse.Namespace) -> Code:
     if args.catalog:
         catalog = Catalog(Path(args.catalog))
-        code = catalog.match(args.modality, None)
+        body_part = getattr(args, "body_part", None)
+        code = catalog.match(args.modality, body_part)
         if code is None:
-            raise SystemExit(f"no catalog entry matches modality {args.modality}")
+            qualifier = f" and body-part {body_part}" if body_part else ""
+            raise SystemExit(f"no catalog entry matches modality {args.modality}{qualifier}")
         return code
+    if not args.code:
+        raise SystemExit("run needs --code or --catalog")
     value, _, scheme = args.code.partition(":")
     return Code(value=value, scheme=scheme or "99CLARUS", meaning="")
 
