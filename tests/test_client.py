@@ -8,6 +8,7 @@ shipped here - so each test drives the real code path.
 import pytest
 
 from slicer_ups_client import UPSClient, Code, parse_event
+from slicer_ups_client.client import _dicom_part
 from slicer_ups_client.watcher import Subscription
 
 
@@ -48,15 +49,17 @@ class FakeTransport:
 
     def put(self, path, body=None, raw=False):
         self.calls.append(("put", path))
+        self.last_json = body
         return self.post_result
 
     def delete(self, path):
         self.calls.append(("delete", path))
         return self.post_result
 
-    def request(self, method, path, *, params=None, json=None, raw=False):
+    def request(self, method, path, *, params=None, json=None, raw=False, accept=None):
         self.calls.append((method, path, params))
         self.last_json = json
+        self.last_accept = accept
         return self.post_result
 
     def open_websocket(self, url, timeout=None):
@@ -183,3 +186,194 @@ def test_reverted_subscribe_order_would_fail():
     UPSClient(t).watcher.subscribe("1.2.3", "AE", mode="websocket")
     assert t.calls[0][0] == "post"
     assert t.calls[1][0] == "ws"
+
+
+WORKITEM_IN_PROGRESS_LOCKED = {
+    "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+    "00741000": {"vr": "CS", "Value": ["IN PROGRESS"]},
+    "00081195": {"vr": "UI", "Value": ["2.25.77"]},
+}
+
+
+def test_update_posts_with_transaction_uid_on_both_carriages():
+    t = FakeTransport()
+    t.get_result = WORKITEM_IN_PROGRESS_LOCKED
+    UPSClient(t).update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]  # calls[0] is the get of the current workitem
+    assert method == "POST"
+    assert path == "/workitems/2.25.9"
+    assert params == {"TransactionUid": "2.25.77"}
+    assert t.last_json["00081195"] == {"vr": "UI", "Value": ["2.25.77"]}
+    assert t.last_json["00741204"]["Value"] == ["retuned"]
+
+
+def test_update_scheduled_workitem_omits_the_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    UPSClient(t).update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]
+    assert method == "POST"
+    assert params is None
+    assert "00081195" not in t.last_json
+
+
+def test_change_state_claim_installs_a_new_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    UPSClient(t).change_state("2.25.9", "IN PROGRESS")
+    assert t.calls[1][0:2] == ("put", "/workitems/2.25.9/state")
+    body = t.last_json
+    assert body["00741000"]["Value"] == ["IN PROGRESS"]
+    assert body["00081195"]["Value"][0].startswith("2.25.")
+
+
+def test_change_state_reuses_the_generated_transaction_uid():
+    t = FakeTransport()
+    # The claim starts from a SCHEDULED workitem with no lock.
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    cl = UPSClient(t)
+    cl.change_state("2.25.9", "IN PROGRESS")
+    claim_uid = t.last_json["00081195"]["Value"][0]
+    # GET never returns the Transaction UID (11.5.2), so the later CANCEL must
+    # reuse the UID the claim generated and retained - not re-read it.
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["IN PROGRESS"]},
+    }
+    cl.change_state("2.25.9", "CANCELED", reason="user")
+    body = t.last_json
+    assert body["00081195"]["Value"] == [claim_uid]
+    assert body["00741238"]["Value"] == ["user"]
+
+
+def test_download_outputs_reads_the_nested_output_sequence(tmp_path):
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+        "00741000": {"vr": "CS", "Value": ["COMPLETED"]},
+        "00741216": {"vr": "SQ", "Value": [{
+            "00404033": {"vr": "SQ", "Value": [{
+                "00081150": {"vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.7"]},
+                "0020000E": {"vr": "UI", "Value": ["2.25.44"]},
+                "00081155": {"vr": "UI", "Value": ["2.25.55"]},
+            }]},
+        }]},
+    }
+    t.post_result = FakeResponse()
+    t.post_result.content = b"\x00\x01\x02"
+    paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
+    assert len(paths) == 1
+    assert paths[0].read_bytes() == b"\x00\x01\x02"
+    # The item omits the study UID; the URL falls back to the workitem's own.
+    assert ("GET", "/studies/1.2.3/series/2.25.44/instances/2.25.55", None) in t.calls
+    # The instance must be retrieved as binary DICOM, not DICOM JSON metadata.
+    assert t.last_accept == 'multipart/related; type="application/dicom"'
+
+
+def test_download_outputs_extracts_the_dicom_part_from_multipart(tmp_path):
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+        "00741216": {"vr": "SQ", "Value": [{
+            "00404033": {"vr": "SQ", "Value": [{
+                "0020000E": {"vr": "UI", "Value": ["2.25.44"]},
+                "00081155": {"vr": "UI", "Value": ["2.25.55"]},
+            }]},
+        }]},
+    }
+    boundary = "clarus-boundary-1-0"
+    dicom = b"\x00" * 128 + b"DICM" + b"\x01\x02\x03"
+    t.post_result = FakeResponse(headers={
+        "Content-Type": f'multipart/related; type="application/dicom"; boundary="{boundary}"',
+    })
+    t.post_result.content = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/dicom; transfer-syntax=1.2.840.10008.1.2.1\r\n\r\n"
+    ).encode() + dicom + f"\r\n--{boundary}--\r\n".encode()
+    paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
+    assert len(paths) == 1
+    assert paths[0].read_bytes() == dicom
+
+
+def test_download_outputs_handles_nested_referenced_sop_sequence(tmp_path):
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+        "00741216": {"vr": "SQ", "Value": [{
+            "00404033": {"vr": "SQ", "Value": [{
+                "0020000E": {"vr": "UI", "Value": ["2.25.44"]},
+                "00081199": {"vr": "SQ", "Value": [
+                    {"00081155": {"vr": "UI", "Value": ["2.25.55"]}},
+                    {"00081155": {"vr": "UI", "Value": ["2.25.66"]}},
+                ]},
+            }]},
+        }]},
+    }
+    t.post_result = FakeResponse()
+    t.post_result.content = b"x"
+    paths = UPSClient(t).download_outputs("2.25.9", out_dir=tmp_path)
+    assert [p.name for p in paths] == ["2.25.55.dcm", "2.25.66.dcm"]
+
+
+def test_multipart_extraction_preserves_a_trailing_crlf_in_the_payload():
+    boundary = "b"
+    payload = b"DICM\x00\x01" + b"\r\n"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+        + payload
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    ct = f'multipart/related; type="application/dicom"; boundary="{boundary}"'
+    assert _dicom_part(ct, body) == payload
+
+
+def test_multipart_extraction_preserves_inline_boundary_like_bytes():
+    boundary = "b"
+    payload = b"DICM\x00--" + boundary.encode() + b"--\x00\x01"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+        + payload
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    ct = f'multipart/related; type="application/dicom"; boundary="{boundary}"'
+    assert _dicom_part(ct, body) == payload
+
+
+def test_update_scheduled_workitem_omits_a_stale_cached_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["SCHEDULED"]},
+    }
+    cl = UPSClient(t)
+    cl._transaction_uids["2.25.9"] = "2.25.stale"
+    cl.update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]
+    assert params is None
+    assert "00081195" not in t.last_json
+
+
+def test_update_in_progress_uses_the_cached_transaction_uid():
+    t = FakeTransport()
+    t.get_result = {
+        "00080018": {"vr": "UI", "Value": ["2.25.9"]},
+        "00741000": {"vr": "CS", "Value": ["IN PROGRESS"]},
+    }
+    cl = UPSClient(t)
+    cl._transaction_uids["2.25.9"] = "2.25.99"
+    cl.update("2.25.9", {"00741204": {"vr": "SH", "Value": ["retuned"]}})
+    method, path, params = t.calls[1]
+    assert params == {"TransactionUid": "2.25.99"}
+    assert t.last_json["00081195"] == {"vr": "UI", "Value": ["2.25.99"]}
