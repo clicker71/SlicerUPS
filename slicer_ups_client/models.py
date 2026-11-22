@@ -7,6 +7,7 @@ every element carries a `vr` and a `Value` list.
 """
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -38,8 +39,12 @@ SCHEDULED_WORKITEM_CODE_SEQUENCE = "00404018"
 INPUT_INFORMATION_SEQUENCE = "00404021"
 OUTPUT_INFORMATION_SEQUENCE = "00404033"
 PROCEDURE_STEP_STATE = "00741000"
+SCHEDULED_PROCEDURE_STEP_PRIORITY = "00741200"
+PROCEDURE_STEP_LABEL = "00741204"
 SCHEDULED_PROCESSING_PARAMETERS_SEQUENCE = "00741210"
 REASON_FOR_CANCELLATION = "00741238"
+SCHEDULED_PROCEDURE_STEP_START_DATETIME = "00404005"
+INPUT_READINESS_STATE = "00404041"
 
 # --- Content Item Macro (PS3.3 Table 10-2) ------------------------------
 VALUE_TYPE = "0040a040"
@@ -53,6 +58,11 @@ STATE_SCHEDULED = "SCHEDULED"
 STATE_IN_PROGRESS = "IN PROGRESS"
 STATE_COMPLETED = "COMPLETED"
 STATE_CANCELED = "CANCELED"
+
+
+def new_workitem_uid() -> str:
+    """A UUID-derived SOP Instance UID: PS3.5 '2.25.' + the UUID as a decimal integer."""
+    return f"2.25.{uuid.uuid4().int}"
 TERMINAL_STATES = (STATE_COMPLETED, STATE_CANCELED)
 
 
