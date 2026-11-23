@@ -14,7 +14,7 @@ set(EXTENSION_CONTRIBUTORS "Daniil Solgalov (Clarus PACS)")
 set(EXTENSION_DESCRIPTION
   "CLI-first DICOMweb UPS-RS (PS3.18) task requester and watcher.")
 set(EXTENSION_STATUS "Alpha")
-set(EXTENSION_DEPENDS "")
+set(EXTENSION_DEPENDS "NA")
 
 set(MODULE_NAME ${PROJECT_NAME})
 set(MODULE_TITLE ${PROJECT_NAME})
@@ -28,3 +28,6 @@ slicerMacroBuildScriptedModule(
   RESOURCES slicer_ups_client scripts hooks
   WITH_GENERIC_TESTS
 )
+
+include(${Slicer_EXTENSION_GENERATE_CONFIG})
+include(${Slicer_EXTENSION_CPACK})

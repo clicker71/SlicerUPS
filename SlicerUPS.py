@@ -44,7 +44,14 @@ def import_outputs(paths: Iterable[str | Path]) -> list[str]:
     loaded: list[str] = []
     for path in paths:
         file_path = str(path)
-        nodes = slicer.util.loadVolume(file_path, returnNode=True)
-        if nodes is not None:
+        # loadNodeFromFile auto-detects the reader (SEG/SR/RTSTRUCT/SC/volume),
+        # which is what UPS-RS outputs can be. loadVolume is volume-only and
+        # its deprecated returnNode=True returns a (status, node) tuple.
+        nodes = slicer.util.loadNodeFromFile(file_path)
+        if nodes is None:
+            continue
+        if isinstance(nodes, list):
+            loaded.extend(node.GetID() for node in nodes if node is not None)
+        else:
             loaded.append(nodes.GetID())
     return loaded
