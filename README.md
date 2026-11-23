@@ -173,23 +173,25 @@ this per-node catalog instead.
 
 ## Python dependencies
 
-The core is pure stdlib plus two optional extras, each loaded lazily and
-never needed together:
+`requests` is required: the default HTTP transport imports it when a
+`DicomwebClient` is built without an injected session. The other two are
+optional, loaded lazily, and never needed together:
 
-- `PyYAML` - only for `.yaml`/`.yml` catalogs; `.json` catalogs work with
-  no extra dependency. A missing PyYAML raises a clear RuntimeError
+- `requests` - required, the HTTP transport for every verb.
+- `PyYAML` - optional, only for `.yaml`/`.yml` catalogs; `.json` catalogs
+  work with no extra dependency. A missing PyYAML raises a clear RuntimeError
   suggesting a `.json` catalog instead.
-- `websocket-client` - only for WebSocket watch. With `--watch-mode auto` a
-  missing package silently falls back to polling; `--watch-mode websocket`
-  raises the underlying import error.
+- `websocket-client` - optional, only for WebSocket watch. With
+  `--watch-mode auto` a missing package silently falls back to polling;
+  `--watch-mode websocket` raises the underlying import error.
 
 3D Slicer's embedded Python does **not** read `requirements.txt`
 automatically. On the CLI use your own venv
-(`pip install -r requirements.txt`); inside Slicer install the extras
+(`pip install -r requirements.txt`); inside Slicer install the dependencies
 per-node:
 
 ```python
-slicer.util.pip_install("PyYAML websocket-client")
+slicer.util.pip_install("requests PyYAML websocket-client")
 ```
 
 ## License
