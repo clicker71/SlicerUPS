@@ -40,11 +40,26 @@ class SlicerUPS(ScriptedLoadableModule):
 
 
 def import_outputs(paths: Iterable[str | Path]) -> list[str]:
-    """Load result DICOM files into the MRML scene. Returns loaded node IDs."""
+    """Load result DICOM files into the MRML scene. Returns loaded node IDs.
+
+    UPS-RS Output Information Sequence (0040,4033) references arbitrary SOP
+    Classes (SEG/SR/RTSTRUCT/RTDOSE/PM/SC/PDF/WSI/...), so there is no
+    whitelist here: loadNodeFromFile auto-detects the reader. A file the
+    installed Slicer has no reader for is skipped with a warning, never fatal
+    for the rest.
+    """
     loaded: list[str] = []
     for path in paths:
         file_path = str(path)
-        nodes = slicer.util.loadVolume(file_path, returnNode=True)
-        if nodes is not None:
+        try:
+            nodes = slicer.util.loadNodeFromFile(file_path)
+        except RuntimeError as exc:
+            log.warning("skip %s: %s", file_path, exc)
+            continue
+        if nodes is None:
+            continue
+        if isinstance(nodes, list):
+            loaded.extend(node.GetID() for node in nodes if node is not None)
+        else:
             loaded.append(nodes.GetID())
     return loaded
