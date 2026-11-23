@@ -12,6 +12,10 @@ watch / download_outputs - against any conformant origin.
 The user does not think about the transport; the result arrives when it is
 ready.
 
+## Screenshot
+
+![SlicerUPS driving a UPS-RS workitem: run, search, clinfer log, outputs](demo.png)
+
 ## Layering
 
 - `slicer_ups_client/` - the core. Pure Python, **no Qt/Slicer imports**.
