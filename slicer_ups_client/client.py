@@ -25,6 +25,7 @@ from .models import (
     SERIES_INSTANCE_UID,
     REQUESTED_PROCEDURE_ID,
     SCHEDULED_WORKITEM_CODE_SEQUENCE,
+    SCHEDULED_STATION_NAME_CODE_SEQUENCE,
     INPUT_INFORMATION_SEQUENCE,
     OUTPUT_INFORMATION_SEQUENCE,
     REFERENCED_SERIES_SEQUENCE,
@@ -205,6 +206,7 @@ class UPSClient:
         modality: str = "CT",
         series_uid: Optional[str] = None,
         requested_procedure_id: Optional[str] = None,
+        station: Optional[str] = None,
         ae_title: str = "SLICERUPS",
         watch_mode: str = "auto",
         poll_interval: float = 2.0,
@@ -220,6 +222,7 @@ class UPSClient:
             modality=modality,
             series_uid=series_uid,
             requested_procedure_id=requested_procedure_id,
+            station=station,
         )
         uid = self.create(workitem, parameters=params)
         self.watcher.watch(
@@ -318,6 +321,7 @@ class UPSClient:
         modality: str,
         series_uid: Optional[str],
         requested_procedure_id: Optional[str],
+        station: Optional[str] = None,
     ) -> dict:
         body: dict[str, dict] = {
             MODALITY: {"vr": "CS", "Value": [modality]},
@@ -342,6 +346,13 @@ class UPSClient:
                 "Value": [{SERIES_INSTANCE_UID: {"vr": "UI", "Value": [series_uid]}}],
             }
         body[INPUT_INFORMATION_SEQUENCE] = {"vr": "SQ", "Value": [input_item]}
+        if station:
+            body[SCHEDULED_STATION_NAME_CODE_SEQUENCE] = {
+                "vr": "SQ",
+                "Value": [
+                    Code(value=station, scheme="99CLARUS", meaning=station).to_json()
+                ],
+            }
         return body
 
 

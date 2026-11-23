@@ -161,6 +161,31 @@ def test_build_workitem_has_type1_create_attributes():
     assert "00080018" not in wi
 
 
+def test_build_workitem_sets_the_scheduled_station_when_given():
+    cl = UPSClient(FakeTransport())
+    wi = cl._build_workitem(
+        study_uid="1.2.3",
+        code=Code("CXR-AI", "99CLARUS"),
+        modality="DX",
+        series_uid=None,
+        requested_procedure_id=None,
+        station="CLINFER",
+    )
+    seq = wi["00404025"]["Value"]
+    assert len(seq) == 1
+    assert seq[0]["00080100"]["Value"] == ["CLINFER"]
+    assert seq[0]["00080102"]["Value"] == ["99CLARUS"]
+
+    absent = cl._build_workitem(
+        study_uid="1.2.3",
+        code=Code("CXR-AI", "99CLARUS"),
+        modality="DX",
+        series_uid=None,
+        requested_procedure_id=None,
+    )
+    assert "00404025" not in absent
+
+
 def test_parse_event_clarus_envelope_compatibility():
     event = parse_event('{"workitem_uid":"1.2.3","new_state":"COMPLETED"}')
     assert event is not None and event.workitem_uid == "1.2.3"

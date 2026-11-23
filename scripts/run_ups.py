@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--modality", default="CT")
     p.add_argument("--body-part", dest="body_part", help="body part for catalog matching")
     p.add_argument("--catalog", help="path to a catalog JSON/YAML (alternative to --code)")
+    p.add_argument("--station", help="Scheduled Station Name code value (e.g. CLINFER)")
     p.add_argument("--watch-mode", dest="watch_mode", default="auto")
     p.add_argument("--poll-interval", dest="poll_interval", type=float, default=2.0)
     p.add_argument("--timeout", type=float)
@@ -80,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
             args.study,
             code,
             modality=args.modality,
+            station=args.station,
             watch_mode=args.watch_mode,
             poll_interval=args.poll_interval,
             timeout=args.timeout,

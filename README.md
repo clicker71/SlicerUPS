@@ -58,6 +58,8 @@ and prints the workitem UID. Flags:
 - `--modality` - default CT.
 - `--body-part` - optional body part, used only for catalog matching.
 - `--catalog` - alternative to `--code`: pick the code from a catalog file.
+- `--station` - optional Scheduled Station Name code value (e.g. `CLINFER`);
+  assigns the workitem to that station so a station-scoped performer finds it.
 - `--watch-mode` - `auto` (default) | `websocket` | `poll`.
 - `--poll-interval` - seconds between polls.
 - `--timeout` - seconds before giving up.
