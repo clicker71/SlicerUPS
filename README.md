@@ -191,7 +191,7 @@ automatically. On the CLI use your own venv
 per-node:
 
 ```python
-slicer.util.pip_install("requests PyYAML websocket-client")
+slicer.packaging.pip_install("requests PyYAML websocket-client")
 ```
 
 ## License
